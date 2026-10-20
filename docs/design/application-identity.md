@@ -32,7 +32,7 @@ Orange is an accent rather than a background for large fields of copy. Body copy
 
 ## Typography and composition
 
-The lowercase wordmark is a compact, bold sans serif with careful spacing. The committed SVG contains glyph outlines, so it requires no installed web font and redistributes no font files. Its export uses the macOS `HelveticaNeue-Bold` face. Editorial headings use Helvetica Neue; small technical labels use Menlo. The application uses its platform sans serif and the user's selected code font.
+The lowercase wordmark is a compact, bold sans serif with careful spacing. The committed SVG contains glyph outlines, so it requires no installed web font and redistributes no font files. Its export uses the macOS `HelveticaNeue-Bold` face. Editorial headings use Helvetica Neue; small technical labels use Menlo. The application uses platform sans serif for interface text and a system monospace face for code. Its welcome screen uses the canonical outlined SVG wordmark on every platform.
 
 Use generous margins and align content to a visible grid. Prefer flat surfaces, fine rules, sentence case labels, and small monospaced technical annotations. Numbered labels can give long pages or feature groups a useful rhythm. Leave the editor content visually dominant.
 
