@@ -40,7 +40,7 @@ Before packaging, regenerate `THIRD_PARTY_NOTICES.md` using `python3 scripts/thi
 
 ## Signing
 
-Stable public releases require signing credentials. The workflow also supports draft development previews without signing credentials; these are always marked as prereleases and include a signing warning. Configure these repository secrets before dispatching the release workflow. Keep private keys and passwords out of source control.
+Stable public releases require signing credentials. The workflow also supports draft development previews without signing credentials; these are always marked as prereleases and include a signing warning. Configure these repository secrets before dispatching a signed release. Keep private keys and passwords out of source control.
 
 | macOS secret | Value |
 | --- | --- |
@@ -60,11 +60,11 @@ Local macOS builds are ad-hoc signed by default. Local Windows builds are unsign
 ## Release sequence
 
 1. Set the version in `Cargo.toml`, update `Cargo.lock`, and update `CHANGELOG.md`. Stable versions such as `0.1.0` release from `main`. Versions such as `0.2.0-beta.1` release from `dev` and are marked as prereleases. Build metadata is not accepted in release versions.
-2. Run CI and complete native GUI and installer checks on clean macOS and Windows systems. The destination tag must be new: `vVERSION` for signed builds or `vVERSION-preview` for unsigned previews.
-3. Open Actions, select **Prepare Kite release**, select `main` or `dev`, enter the exact Cargo version without `v`, and select whether to sign. Unsigned builds always remain draft prereleases.
+2. Run CI and review installer smoke checks. Stable releases also require native GUI and installer acceptance on clean macOS and Windows systems. Preview notes must identify any outstanding manual platform testing. The destination tag must be new: `vVERSION` for signed builds or `vVERSION-preview` for unsigned previews.
+3. Open Actions, select **Prepare Kite release**, select `main` or `dev`, enter the exact Cargo version without `v`, and select whether to sign. Unsigned builds always start as draft prereleases.
 4. The workflow validates the channel, tests and builds the three native targets, applies the selected signing policy, and verifies asset completeness and checksums. It creates a draft release for the tested commit with the selected version tag and generated notes. Unsigned notes explicitly identify the macOS and Windows signing limitations.
 5. Download the draft assets and verify installation, launch, file opening, terminal use, and uninstallation where supported. Run `shasum -a 256 -c SHA256SUMS.txt` on macOS or `Get-FileHash FILE -Algorithm SHA256` on Windows to verify downloads.
-6. Review release notes and publish a signed draft when ready. Keep unsigned previews as draft prereleases for testing. Stable releases remain on `main`; merge release fixes and version changes back to `dev`.
+6. Review release notes and publish the draft when its acceptance requirements are met. Unsigned previews must remain marked as prereleases and retain the signing warning; they must not be advertised as stable. Stable releases require signing and native acceptance. Stable releases remain on `main`; merge release fixes and version changes back to `dev`.
 
 Ordinary pushes and pull requests build development artifacts with a 14-day retention period. They do not publish releases. Release builds use the commit selected when the workflow was dispatched. Re-running the complete workflow for an existing version is rejected to prevent replacing a published tag; inspect an existing draft or failed run before retrying its failed jobs.
 
