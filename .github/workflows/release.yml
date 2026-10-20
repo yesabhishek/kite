@@ -1,0 +1,175 @@
+name: Prepare Kite release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Cargo.toml version without v. Use main for stable or dev for prerelease.
+        required: true
+        type: string
+      signed:
+        description: Sign and notarize installers. Requires repository signing secrets.
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kite-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release channel
+    runs-on: ubuntu-22.04
+    outputs:
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify version and branch
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          RELEASE_REF: ${{ github.ref }}
+          SIGNED: ${{ inputs.signed }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          requested = os.environ['REQUESTED_VERSION']
+          manifest = pathlib.Path('Cargo.toml').read_text()
+          package = re.search(r'^\[package\]\s*\n(.*?)(?=^\[|\Z)', manifest, re.M | re.S).group(1)
+          actual = re.search(r'^version\s*=\s*"([^"]+)"', package, re.M).group(1)
+          semver = r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?'
+          match = re.fullmatch(semver, requested)
+          if match is None or requested != actual:
+              raise SystemExit('Release version must be valid SemVer and match Cargo.toml, without build metadata')
+          version_is_prerelease = match.group(4) is not None
+          signed = os.environ['SIGNED'] == 'true'
+          prerelease = version_is_prerelease or not signed
+          tag = f'v{requested}' + ('' if signed else '-preview')
+          expected_ref = 'refs/heads/dev' if version_is_prerelease else 'refs/heads/main'
+          if os.environ['RELEASE_REF'] != expected_ref:
+              raise SystemExit(f'This version must be released from {expected_ref}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'prerelease={str(prerelease).lower()}\n')
+              output.write(f'tag={tag}\n')
+          PY
+      - name: Require a new release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          python3 - <<'PY_CHECK'
+          import os
+          import urllib.error
+          import urllib.request
+
+          base = os.environ['GITHUB_API_URL']
+          repository = os.environ['GH_REPO']
+          tag = os.environ['RELEASE_TAG']
+          for endpoint in [f'git/ref/tags/{tag}', f'releases/tags/{tag}']:
+              request = urllib.request.Request(
+                  f'{base}/repos/{repository}/{endpoint}',
+                  headers={'Authorization': f'Bearer {os.environ["GH_TOKEN"]}', 'Accept': 'application/vnd.github+json'},
+              )
+              try:
+                  with urllib.request.urlopen(request):
+                      raise SystemExit(f'{tag} already exists. Choose a new version or review the existing draft.')
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise
+          PY_CHECK
+  build:
+    name: Build installers
+    needs: validate
+    uses: ./.github/workflows/build.yml
+    with:
+      signed: ${{ inputs.signed }}
+    secrets: inherit
+  draft:
+    name: Draft GitHub release
+    needs: [validate, build]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: kite-packages-*
+          merge-multiple: true
+          path: packages
+      - name: Verify complete release and checksums
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+
+          root = pathlib.Path('packages')
+          version = os.environ['RELEASE_VERSION']
+          expected = set()
+          for platform, suffixes in {
+              'macos-arm64': ['.zip', '.dmg'],
+              'macos-x64': ['.zip', '.dmg'],
+              'windows-x64': ['.zip', '-setup.exe'],
+          }.items():
+              stem = f'kite-{version}-{platform}'
+              expected.update(stem + suffix for suffix in suffixes + ['-BUILD-INFO.txt', '-SHA256SUMS.txt'])
+          files = [path for path in root.rglob('*') if path.is_file()]
+          if len(files) != len(expected) or {path.name for path in files} != expected:
+              raise SystemExit('Release must include exactly the expected macOS and Windows assets')
+          verified = set()
+          combined = []
+          for manifest in sorted(root.rglob('*-SHA256SUMS.txt')):
+              for line in manifest.read_text(encoding='utf-8-sig').splitlines():
+                  digest, name = line.split('  ', 1)
+                  if name not in expected or name.endswith('-SHA256SUMS.txt') or name in verified:
+                      raise SystemExit(f'Unexpected checksum entry: {name}')
+                  artifact = manifest.parent / name
+                  hasher = hashlib.sha256()
+                  with artifact.open('rb') as source:
+                      for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                          hasher.update(chunk)
+                  if hasher.hexdigest() != digest:
+                      raise SystemExit(f'Checksum mismatch: {name}')
+                  verified.add(name)
+                  combined.append(f'{digest}  {name}\n')
+          if verified != {name for name in expected if not name.endswith('-SHA256SUMS.txt')}:
+              raise SystemExit('Every installer, archive, and build-info file must have a checksum')
+          (root / 'SHA256SUMS.txt').write_text(''.join(sorted(combined)))
+          PY
+      - name: Create draft release at the tested commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          SIGNED: ${{ inputs.signed }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          mapfile -d '' artifacts < <(find packages -type f -print0)
+          title="Kite $RELEASE_VERSION"
+          if [[ "$SIGNED" != true ]]; then
+            title="$title preview"
+            cat > release-notes.md <<'NOTES'
+          This is a development preview for installation testing. macOS downloads are ad-hoc signed, without Developer ID signing or notarization. Windows downloads are unsigned. Operating system security prompts may block these builds. Signed stable releases will use a separate version tag.
+
+          Installers are available for macOS on Apple Silicon and Intel, and Windows x64. Linux users can build from source. SHA256SUMS.txt contains download checksums.
+          NOTES
+          else
+            printf '%s\n' 'Signed Kite installers for macOS on Apple Silicon and Intel, and Windows x64. Linux users can build from source. SHA256SUMS.txt contains download checksums.' > release-notes.md
+          fi
+          args=(--draft --target "$SOURCE_SHA" --title "$title" --generate-notes --notes-file release-notes.md)
+          if [[ "$PRERELEASE" == true ]]; then args+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" "${artifacts[@]}" "${args[@]}"

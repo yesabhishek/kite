@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Kite
+Comment=A focused native editor and terminal
+Exec=kite %F
+Icon=kite
+Terminal=false
+Categories=Development;TextEditor;
+StartupNotify=true
+MimeType=text/plain;

@@ -1,0 +1,8 @@
+/target/
+/dist/
+/.artifacts/
+.DS_Store
+*.p12
+*.pfx
+*.mobileprovision
+__pycache__/

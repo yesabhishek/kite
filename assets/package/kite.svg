@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Kite app icon">
+  <title>Kite app icon</title>
+  <path d="M960 512 L960 768 C960 874.039 874.039 960 768 960 L256 960 C149.961 960 64 874.039 64 768 L64 256 C64 149.961 149.961 64 256 64 L768 64 C874.039 64 960 149.961 960 256 Z" fill="#F4F2EC" stroke="#D8D5CD" stroke-width="2"/>
+  <path d="M515.072 185.44 L227.84 446.56 L493.568 446.56 Z" fill="#232323"/>
+  <path d="M538.88 185.44 L803.84 446.56 L518.144 446.56 Z" fill="#232323"/>
+  <path d="M243.2 469.6 L490.496 469.6 L459.776 830.56 Z" fill="#232323"/>
+  <path d="M515.072 469.6 L788.48 469.6 L484.352 830.56 Z" fill="#DE4B2C"/>
+</svg>

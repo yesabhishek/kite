@@ -1,0 +1,179 @@
+name: Build Kite installers
+on:
+  workflow_call:
+    inputs:
+      signed:
+        type: boolean
+        default: false
+    secrets:
+      MACOS_CERTIFICATE_BASE64:
+        required: false
+      MACOS_CERTIFICATE_PASSWORD:
+        required: false
+      MACOS_SIGNING_IDENTITY:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      APPLE_APP_SPECIFIC_PASSWORD:
+        required: false
+      WINDOWS_CERTIFICATE_BASE64:
+        required: false
+      WINDOWS_CERTIFICATE_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Test
+        run: cargo test --locked --all-targets -p kite -p iced_term
+      - name: Build native release
+        run: cargo build --locked --release --target ${{ matrix.target }} --bin kite
+      - name: Collect dependency notices
+        shell: bash
+        run: python3 scripts/third-party-notices.py --target '${{ matrix.target }}'
+      - name: Import macOS signing identity
+        if: runner.os == 'macOS' && inputs.signed
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for key in MACOS_CERTIFICATE_BASE64 MACOS_CERTIFICATE_PASSWORD APPLE_ID APPLE_TEAM_ID APPLE_APP_SPECIFIC_PASSWORD; do
+            [[ -n "${!key}" ]] || { printf 'Missing signing secret: %s\n' "$key" >&2; exit 1; }
+          done
+          keychain="$RUNNER_TEMP/kite-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          printf '::add-mask::%s\n' "$keychain_password"
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/developer-id.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain"
+          xcrun notarytool store-credentials kite-notary --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --keychain "$keychain"
+          printf 'MACOS_SIGNING_KEYCHAIN=%s\nMACOS_NOTARY_PROFILE=kite-notary\n' "$keychain" >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+      - name: Package macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          SIGNED: ${{ inputs.signed }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          args=()
+          if [[ "$SIGNED" == true ]]; then args+=(--require-signing); else unset MACOS_SIGNING_IDENTITY; fi
+          bash scripts/package.sh --target '${{ matrix.target }}' --skip-build "${args[@]}"
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SIGNED: ${{ inputs.signed }}
+          WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          choco install nsis --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
+          if ($env:SIGNED -eq 'true') {
+            ./scripts/package-windows.ps1 -SkipBuild -RequireSigning
+          } else {
+            Remove-Item Env:WINDOWS_CERTIFICATE_BASE64, Env:WINDOWS_CERTIFICATE_PASSWORD -ErrorAction SilentlyContinue
+            ./scripts/package-windows.ps1 -SkipBuild
+          }
+      - name: Smoke test packaged macOS executable
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "kite"))')"
+          actual_version="$("dist/${{ matrix.target }}/Kite.app/Contents/MacOS/kite" --version)"
+          [[ "$actual_version" == "Kite $expected_version" ]] || { printf 'Unexpected packaged version: %s\n' "$actual_version" >&2; exit 1; }
+      - name: Smoke test Windows install and uninstall
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $metadataJson = & cargo metadata --locked --no-deps --format-version 1
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed' }
+          $metadata = $metadataJson | ConvertFrom-Json
+          $version = ($metadata.packages | Where-Object { $_.name -eq 'kite' } | Select-Object -First 1).version
+          $installer = Join-Path $PWD "dist\x86_64-pc-windows-msvc\kite-$version-windows-x64-setup.exe"
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Kite'
+          $uninstaller = Join-Path $installDir 'uninstall.exe'
+          $stdout = Join-Path $env:RUNNER_TEMP 'kite-version.stdout.txt'
+          $stderr = Join-Path $env:RUNNER_TEMP 'kite-version.stderr.txt'
+          try {
+            $process = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "Installer failed with exit code $($process.ExitCode)" }
+            foreach ($name in @('kite.exe', 'kite.ico', 'uninstall.exe')) {
+              if (-not (Test-Path -LiteralPath (Join-Path $installDir $name) -PathType Leaf)) {
+                throw "Installed file is missing: $name"
+              }
+            }
+            $entry = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\kite'
+            if ($entry.DisplayName -ne 'Kite' -or $entry.DisplayVersion -ne $version) {
+              throw 'Installed application registry metadata is incorrect'
+            }
+            $process = Start-Process -FilePath (Join-Path $installDir 'kite.exe') -ArgumentList '--version' -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "Installed executable failed with exit code $($process.ExitCode)" }
+            $actualVersion = ([string](Get-Content -LiteralPath $stdout -Raw)).Trim()
+            if ($actualVersion -ne "Kite $version") { throw "Unexpected installed version: $actualVersion" }
+          } finally {
+            if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
+              $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+              if ($process.ExitCode -ne 0) { throw "Uninstaller failed with exit code $($process.ExitCode)" }
+            }
+          }
+          if (Test-Path -LiteralPath (Join-Path $installDir 'kite.exe')) { throw 'Uninstaller left the executable installed' }
+          if (Test-Path -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\kite') {
+            throw 'Uninstaller left its registry entry installed'
+          }
+      - name: Upload installers and checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: kite-packages-${{ matrix.target }}
+          path: |
+            dist/**/*.zip
+            dist/**/*.dmg
+            dist/**/*-setup.exe
+            dist/**/*-BUILD-INFO.txt
+            dist/**/*-SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Remove signing keychain
+        if: always() && runner.os == 'macOS' && inputs.signed
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/kite-signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/developer-id.p12"

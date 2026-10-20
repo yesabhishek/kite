@@ -1,0 +1,8 @@
+sequenceDiagram
+    participant User
+    participant Editor
+    participant Renderer
+    User->>Editor: Open Mermaid file
+    Editor->>Renderer: Prepare SVG in background
+    Renderer-->>Editor: Cached vector diagram
+    Editor-->>User: Native preview

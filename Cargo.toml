@@ -1,0 +1,44 @@
+[package]
+name = "kite"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A small space for serious work. A native editor and terminal."
+repository = "https://github.com/yesabhishek/kite"
+homepage = "https://github.com/yesabhishek/kite"
+readme = "README.md"
+keywords = ["editor", "terminal", "native", "desktop"]
+categories = ["text-editors", "development-tools"]
+publish = false
+license = "MIT"
+default-run = "kite"
+
+[dependencies]
+iced = { version = "0.14.0", default-features = false, features = ["tiny-skia", "tokio", "highlighter", "advanced", "canvas", "image-without-codecs", "markdown", "svg", "x11", "wayland", "crisp"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+mermaid-rs-renderer = { version = "=0.3.1", default-features = false }
+iced_term = "=0.8.0"
+rfd = "0.16.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+directories = "6.0"
+tempfile = "3.20"
+blake3 = "1.8"
+tokio = { version = "1", features = ["rt"] }
+ignore = "0.4"
+
+[patch.crates-io]
+iced_term = { path = "vendor/iced_term" }
+iced_widget = { path = "vendor/iced_widget" }
+iced_tiny_skia = { path = "vendor/iced_tiny_skia" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[dev-dependencies]
+iced_runtime = "0.14"
+iced_tiny_skia = "0.14"
+tiny-skia = { version = "0.11", features = ["png-format"] }
