@@ -51,6 +51,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          cache-on-failure: true
       - name: Test
         run: cargo test --locked --all-targets -p kite -p iced_term
       - name: Build native release

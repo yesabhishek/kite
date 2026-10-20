@@ -52,7 +52,7 @@ require python3
 case "$target" in
   aarch64-apple-darwin) platform=macos; arch=arm64 ;;
   x86_64-apple-darwin) platform=macos; arch=x64 ;;
-  *-linux-*) fail 'Linux uses source installation. See README.md for cargo install instructions.' ;;
+  *-linux-*) fail 'Linux uses source installation. See README.md for build instructions.' ;;
   *) fail "Unsupported target: $target" ;;
 esac
 case "$(uname -s):$platform" in
@@ -113,7 +113,7 @@ copy_docs "$app/Contents/Resources"
 cp "$repo_root/assets/package/kite.icns" "$app/Contents/Resources/kite.icns"
 expected_arch=arm64
 [[ "$arch" != x64 ]] || expected_arch=x86_64
-lipo -verify_arch "$expected_arch" "$app/Contents/MacOS/kite"
+lipo "$app/Contents/MacOS/kite" -verify_arch "$expected_arch"
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
